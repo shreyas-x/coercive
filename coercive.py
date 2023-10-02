@@ -142,7 +142,7 @@ class Coercive:
         thruster_address = int.from_bytes(reply[0], "big") & 0x1F
 
         # Bytes 1 and 2 are LSB and MSB of speed
-        print(reply[2], reply[1])
+        # print(reply[2], reply[1])
         speed = int.from_bytes(b"".join([reply[2], reply[1]]), "big")
         direction = "forward" if (status & 0x01 == 0) else "reverse"
 

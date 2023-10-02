@@ -5,10 +5,8 @@ from os import _exit
 from matplotlib import pyplot as plt
 from statistics import pstdev, mean, median
 from datetime import datetime as dt
-
-from warnings import simplefilter
-simplefilter(action='ignore', category=FutureWarning)
-import pandas as pd
+from math import ceil
+import csv
 
 rpms = [500, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200]
 # rpms = [200, 400, 600]
@@ -20,29 +18,33 @@ wai_time = 0.8
 # Forward direction time
 run_time = 4.0
 # Load cell data acq time
-acq_time = 3.0
+acq_time = 2.5
 # Thruster stop, water settling wait time
 stp_time = 4.5 * 60
 # stp_time = 5.0
 
 voltage = 320
 
+
 def main(ts, ms):
     t = Coercive(id = 1)
-    
+
     thrusts = []
     currents = []
     read_rpms = []
-    data = pd.DataFrame(columns=["Voltage", "Current", "Set RPM", "Read RPM", "Force", "Thrust"])
 
     print("Waiting to start...")
-    time.sleep(5)
+    time.sleep(1)
 
     test_time = dt.now()
     time_str = test_time.strftime("%H_%M_%S")
-    print(f"Started at {test_time.strftime('H:%M:%S')}")
+    print(f"Started at {test_time.strftime('%H:%M:%S')}")
 
     run_open_loop = False
+
+    file = open(f"tests/test_{time_str}.csv", "w", newline="")
+    csv_writer = csv.writer(file)
+    csv_writer.writerow(["Voltage", "Motor Current", "Set RPM", "Read RPM", "Force Data", "Force float", "Thrust"])
 
     for rpm in rpms:
         _forces = []
@@ -58,16 +60,16 @@ def main(ts, ms):
         init = time.time()
         
         # Reverse thruster
-        print("Reversing thruster...")
+        print("\nReversing thruster...")
         # Run reverse at half the rpm to get the water flowing in the opp dir
         pkt = t.generatePacketFromRPM(rpm/2, dir='r', openloop=run_open_loop)
         while(time.time() - init < rev_time):
             ts.write(pkt)
 
-            motor_reply = []
-            for _ in range(20):
-                motor_reply.append(ts.read())
-            motor_data.append(Coercive.parseReply(motor_reply, condensed=True))
+            # motor_reply = []
+            # for _ in range(20):
+            #     # motor_reply.append(ts.read())
+            # motor_data.append(Coercive.parseReply(motor_reply, condensed=True))
 
             time.sleep(0.1)
 
@@ -76,11 +78,12 @@ def main(ts, ms):
         ts.write(pkt)
         time.sleep(wai_time)
 
-        init = time.time()
-
         # Run thruster
         print(f"Running at {rpm} RPM for {run_time} s")
+        init = time.time()
         pkt = t.generatePacketFromRPM(rpm, dir='f', openloop=run_open_loop)
+
+        ms.reset_input_buffer()
         while(time.time() - init < run_time):
             ts.write(pkt)
 
@@ -92,36 +95,52 @@ def main(ts, ms):
             motor_s = reply_decoded[1]
 
             # Read load cell from thruster-start until acq_time
-            force_clean = 0.0
-            force = ms.readline().decode()
-            try:
-                force_clean = float(force[2:-2])
-            except ValueError:
-                pass
+            # force_float = 0.0
+            # force_data = 0.0
+            # try:
+                # ms.read_all()
+                # ms.reset_input_buffer()
+                # print(ms.in_waiting)
+                # force = ms.readline().decode()
+                # force_data = force[2:-2]
+                # force_float = float(force_data)
+            # except ValueError:
+                # pass
 
-            if (time.time() - init < acq_time):
-                _forces.append(force_clean)
-                _read_rpms.append(int(motor_s))
-                _currents.append(float(motor_i))
+            # if (time.time() - init < acq_time):
+            #     _forces.append(force_float)
+            #     _read_rpms.append(int(motor_s))
+            #     _currents.append(float(motor_i))
 
-            row = {"Voltage": voltage, "Current": motor_i,
-                   "Set RPM": rpm, "Read RPM": motor_s,
-                   "Force": force, "Thrust": None}
-            data = data.append(row, ignore_index=True)            
+            row = [voltage,motor_i,rpm,motor_s]
+            csv_writer.writerow(row)    
 
             time.sleep(0.05)
+        
+        load_cell_data = ms.read_all().split(b"\n")
+        load_cell_data_f = []
+        for x in load_cell_data:
+            try:
+                f = float(x[2:-1])
+                load_cell_data_f.append(f)
+            except ValueError:
+                load_cell_data_f.append(0.0)
+        
+        median_thrust = calc_median(load_cell_data_f) * Coercive.MOMENT
+        max_thrust = max(load_cell_data_f) * Coercive.MOMENT
+        print(f"Median thrust for {rpm} RPM is {median_thrust:.2f} kgf, max thrust is {max_thrust:.2f} kgf")
 
         # Stop thruster
         print("Stopping...")
         pkt = t.generatePacketFromRPM(0, dir='f', openloop=run_open_loop)
         ts.write(pkt)
 
-        thrust = calc_median(_forces) * Coercive.MOMENT
-        thrusts.append(thrust)
-        read_rpm = calc_median(_read_rpms[:-10])
-        read_rpms.append(read_rpm)
-        current = calc_median(_currents)
-        currents.append(current)
+        # thrust = calc_median(_forces) * Coercive.MOMENT
+        # thrusts.append(thrust)
+        # read_rpm = calc_median(_read_rpms[:-10])
+        # read_rpms.append(read_rpm)
+        # current = calc_median(_currents)
+        # currents.append(current)
 
         # Wait for water to settle
         if (rpm != rpms[-1]):
@@ -129,12 +148,12 @@ def main(ts, ms):
             while (time.time() - stp_init < stp_time):
                 e = time.time() - stp_init      # elapsed
                 r = stp_time - e                # remaining
-                print(f"\rWaiting for water to settle {(e/stp_time*100):3.1f}%, ETA {r//60:2f}:{r%60:2f}", end="")
+                print(f"\rWaiting for water to settle {ceil(e/stp_time*100):3.0f}%, time left {r//60:2.0f}m:{r%60:2.0f}s", end="")
                 time.sleep(1)
 
     print("\nDone! Saving and Plotting...")
-    data.to_csv(f"tests/test_{time_str}.csv", na_rep="0")
-    generate_plot(currents, read_rpms, thrusts, time_str)
+    file.close()
+    # generate_plot(currents, read_rpms, thrusts, time_str)
 
 def generate_plot(c, r, t, tm):
     if (len(c) != len(t) or len(r) != len(t)):
@@ -143,7 +162,7 @@ def generate_plot(c, r, t, tm):
     else:
         p = [voltage*x for x in c]
 
-        fig, ax = plt.subplots(layout="constrained")
+        fig, ax = plt.subplots()
         ax2 = ax.twinx()
         ax3 = ax.twinx()
 
@@ -179,6 +198,7 @@ if __name__ == "__main__":
         # Initialize serial
         ts = serial.Serial('COM5', 57600)
         ms = serial.Serial('COM3', 9600)
+        ms.set_buffer_size(rx_size=0)
         main(ts, ms)
     except KeyboardInterrupt:
         ts.close()

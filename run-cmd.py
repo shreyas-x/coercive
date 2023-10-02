@@ -5,7 +5,7 @@ import time
 
 # thruster is at 57.6kbps
 def initSerial():
-    ser = serial.Serial('COM5', 57600)
+    ser = serial.Serial('/dev/ttyUSB0', 57600)
     return ser
 
 def closeSerial(ser):
@@ -39,8 +39,8 @@ def main():
                 inputRPM = input()
                 print(f"Running thruster at {inputRPM} RPM")
                 start = time.time()
-                while(time.time() - start < 6):
-                    sendMessageOverSerial(ser, thruster.generatePacketFromRPM(inputRPM, dir='f', openloop=False))
+                while(time.time() - start < 10):
+                    sendMessageOverSerial(ser, thruster.generatePacketFromRPM(inputRPM, dir='f', openloop=True))
                     time.sleep(0.5)
                     for _ in range(20):
                         readBuffer.append(ser.read())
